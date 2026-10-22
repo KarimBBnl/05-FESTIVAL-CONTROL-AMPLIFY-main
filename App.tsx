@@ -141,7 +141,7 @@ export default function App() {
       <View style={s.hero}>
         <Text style={s.heroTag}>ZARAGOZA · FESTIVAL OPERATIONS</Text>
         <Text style={[s.heroTitle,wide&&{fontSize:62}]}>THE NIGHT{ '\n' }IS YOURS.</Text>
-        <Text style={s.heroSub}>Gestiona la programación en tiempo real con datos persistentes en AWS Amplify.</Text>
+        <Text style={s.heroSub}>Gestiona la programación en tiempo real con AWS Amplify. KARIM BAHLI.</Text>
       </View>
       {page==='dashboard' && <>
         <Text style={s.section}>PANEL DE CONTROL</Text>
