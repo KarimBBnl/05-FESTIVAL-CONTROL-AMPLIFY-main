@@ -5,4 +5,6 @@ web-build/
 .env
 .env.*
 !.env.example
+amplify_outputs.json
+amplify_outputs.*.json
 .DS_Store

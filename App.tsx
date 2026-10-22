@@ -1,14 +1,19 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { SafeAreaView, ScrollView, View, Text, TextInput, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
-import { initialEvents, FestivalEvent, EventStatus } from './src/data';
+import { Amplify } from 'aws-amplify';
+import outputs from './amplify_outputs.json';
+import { createEvent, deleteEvent, loadEventsAndSeedIfEmpty, updateEvent } from './src/events-api';
+import { EventSpace, FestivalEvent, EventStatus } from './src/data';
 import { theme as c } from './src/theme';
 
+Amplify.configure(outputs);
+
 type Page = 'dashboard' | 'events' | 'form';
-const stages = ['MAIN STAGE', 'GARDEN', 'WAREHOUSE', 'RIVER STAGE'];
+const stages: EventSpace[] = ['MAIN STAGE', 'GARDEN', 'WAREHOUSE', 'RIVER STAGE'];
 const statuses: EventStatus[] = ['CONFIRMED', 'DELAYED', 'CANCELLED'];
 
-function Action({ label, onPress, secondary = false, danger = false }: {label: string; onPress: () => void; secondary?: boolean; danger?: boolean}) {
-  return <Pressable accessibilityRole="button" onPress={onPress} style={({pressed}) => [s.button, secondary && s.buttonSecondary, danger && s.buttonDanger, pressed && {opacity: .75}]}>
+function Action({ label, onPress, secondary = false, danger = false, disabled = false }: {label: string; onPress: () => void; secondary?: boolean; danger?: boolean; disabled?: boolean}) {
+  return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={({pressed}) => [s.button, secondary && s.buttonSecondary, danger && s.buttonDanger, (pressed || disabled) && {opacity: .75}]}>
     <Text style={s.buttonText}>{label}</Text>
   </Pressable>;
 }
@@ -16,15 +21,15 @@ function Status({value}: {value: EventStatus}) {
   const color = value === 'CONFIRMED' ? c.green : value === 'DELAYED' ? c.amber : c.red;
   return <Text style={[s.status, {color}]}>● {value}</Text>;
 }
-function EventCard({event, onEdit, onStatus, onDelete}: {event: FestivalEvent; onEdit: () => void; onStatus: () => void; onDelete: () => void}) {
+function EventCard({event, onEdit, onStatus, onDelete, disabled}: {event: FestivalEvent; onEdit: () => void; onStatus: () => void; onDelete: () => void; disabled: boolean}) {
   return <View style={s.card}>
     <View style={s.cardHeader}><Text style={s.time}>{event.time}</Text><Status value={event.status}/></View>
     <Text style={s.artist}>{event.artist}</Text>
     <Text style={s.space}>{event.space} · {event.id}</Text>
     <View style={s.cardActions}>
-      <Pressable accessibilityRole="button" onPress={onEdit}><Text style={s.actionText}>EDITAR</Text></Pressable>
-      <Pressable accessibilityRole="button" onPress={onStatus}><Text style={s.actionText}>CAMBIAR ESTADO</Text></Pressable>
-      <Pressable accessibilityRole="button" onPress={onDelete}><Text style={[s.actionText,{color:c.red}]}>ELIMINAR</Text></Pressable>
+      <Pressable accessibilityRole="button" disabled={disabled} onPress={onEdit}><Text style={s.actionText}>EDITAR</Text></Pressable>
+      <Pressable accessibilityRole="button" disabled={disabled} onPress={onStatus}><Text style={s.actionText}>CAMBIAR ESTADO</Text></Pressable>
+      <Pressable accessibilityRole="button" disabled={disabled} onPress={onDelete}><Text style={[s.actionText,{color:c.red}]}>ELIMINAR</Text></Pressable>
     </View>
   </View>;
 }
@@ -32,7 +37,9 @@ export default function App() {
   const {width} = useWindowDimensions();
   const wide = width > 860;
   const [page,setPage] = useState<Page>('dashboard');
-  const [events,setEvents] = useState<FestivalEvent[]>(initialEvents);
+  const [events,setEvents] = useState<FestivalEvent[]>([]);
+  const [loading,setLoading] = useState(true);
+  const [working,setWorking] = useState(false);
   const [search,setSearch] = useState('');
   const [filter,setFilter] = useState('TODOS');
   const [editing,setEditing] = useState<string | null>(null);
@@ -41,18 +48,84 @@ export default function App() {
   const [time,setTime] = useState('21:45');
   const [status,setStatus] = useState<EventStatus>('CONFIRMED');
   const [notice,setNotice] = useState('');
+  const [noticeIsError,setNoticeIsError] = useState(false);
 
+  useEffect(() => {
+    let cancelled = false;
+    loadEventsAndSeedIfEmpty()
+      .then((loadedEvents) => {
+        if (!cancelled) setEvents(loadedEvents);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : 'Error desconocido.';
+          setNotice(`No se pudo conectar con Amplify: ${message}`);
+          setNoticeIsError(true);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const filtered = useMemo(() => events.filter(e => (filter === 'TODOS' || e.space === filter) && (e.artist.toLowerCase().includes(search.toLowerCase()) || e.id.toLowerCase().includes(search.toLowerCase()))),[events,search,filter]);
-  const openNew = () => {setEditing(null);setArtist('');setSpace(stages[0]);setTime('21:45');setStatus('CONFIRMED');setNotice('');setPage('form');};
-  const openEdit = (e: FestivalEvent) => {setEditing(e.id);setArtist(e.artist);setSpace(e.space);setTime(e.time);setStatus(e.status);setNotice('');setPage('form');};
-  const save = () => {
+  const openNew = () => {setEditing(null);setArtist('');setSpace(stages[0]);setTime('21:45');setStatus('CONFIRMED');setNotice('');setNoticeIsError(false);setPage('form');};
+  const openEdit = (e: FestivalEvent) => {setEditing(e.id);setArtist(e.artist);setSpace(e.space);setTime(e.time);setStatus(e.status);setNotice('');setNoticeIsError(false);setPage('form');};
+  const save = async () => {
     if(!artist.trim() || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)){setNotice('Introduce un artista y una hora válida (HH:MM).');return;}
-    if(editing){setEvents(v => v.map(e => e.id === editing ? {...e,artist:artist.trim().toUpperCase(),space,time,status} : e));setNotice('Evento actualizado (datos locales).');}
-    else {const id='EVT-'+Date.now().toString().slice(-7);setEvents(v=>[{id,artist:artist.trim().toUpperCase(),space,time,status},...v]);setNotice('Evento creado (datos locales).');}
-    setPage('events');
+    setWorking(true);
+    try {
+      const values = { artist: artist.trim().toUpperCase(), space, time, status };
+      const saved = editing
+        ? await updateEvent({ id: editing, ...values })
+        : await createEvent(values);
+      setEvents((current) => editing
+        ? current.map((event) => event.id === saved.id ? saved : event)
+        : [saved, ...current]);
+      setNotice(editing ? 'Evento actualizado en Amplify.' : 'Evento creado en Amplify.');
+      setNoticeIsError(false);
+      setPage('events');
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Error desconocido.';
+      setNotice(`No se pudo guardar el evento: ${message}`);
+      setNoticeIsError(true);
+    } finally {
+      setWorking(false);
+    }
   };
-  const changeStatus = (id:string) => {setEvents(v=>v.map(e=>e.id===id?{...e,status:e.status==='CONFIRMED'?'DELAYED':e.status==='DELAYED'?'CANCELLED':'CONFIRMED'}:e));setNotice('Estado actualizado localmente.');};
-  const remove = (id:string) => {setEvents(v=>v.filter(e=>e.id!==id));setNotice('Evento eliminado localmente.');};
+  const changeStatus = async (event: FestivalEvent) => {
+    const nextStatus = event.status === 'CONFIRMED' ? 'DELAYED' : event.status === 'DELAYED' ? 'CANCELLED' : 'CONFIRMED';
+    setWorking(true);
+    try {
+      const updated = await updateEvent({ ...event, status: nextStatus });
+      setEvents((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setNotice('Estado actualizado en Amplify.');
+      setNoticeIsError(false);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Error desconocido.';
+      setNotice(`No se pudo actualizar el estado: ${message}`);
+      setNoticeIsError(true);
+    } finally {
+      setWorking(false);
+    }
+  };
+  const remove = async (id:string) => {
+    setWorking(true);
+    try {
+      await deleteEvent(id);
+      setEvents((current) => current.filter((event) => event.id !== id));
+      setNotice('Evento eliminado de Amplify.');
+      setNoticeIsError(false);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Error desconocido.';
+      setNotice(`No se pudo eliminar el evento: ${message}`);
+      setNoticeIsError(true);
+    } finally {
+      setWorking(false);
+    }
+  };
   const confirmed = events.filter(e=>e.status==='CONFIRMED').length;
   const delayed = events.filter(e=>e.status==='DELAYED').length;
   return <SafeAreaView style={s.root}>
@@ -68,7 +141,7 @@ export default function App() {
       <View style={s.hero}>
         <Text style={s.heroTag}>ZARAGOZA · FESTIVAL OPERATIONS</Text>
         <Text style={[s.heroTitle,wide&&{fontSize:62}]}>THE NIGHT{ '\n' }IS YOURS.</Text>
-        <Text style={s.heroSub}>Gestiona la programación en tiempo real. Demo interactiva sin backend.</Text>
+        <Text style={s.heroSub}>Gestiona la programación en tiempo real con datos persistentes en AWS Amplify.</Text>
       </View>
       {page==='dashboard' && <>
         <Text style={s.section}>PANEL DE CONTROL</Text>
@@ -76,19 +149,21 @@ export default function App() {
           {[[String(events.length).padStart(2,'0'),'EVENTOS',c.white],[String(confirmed).padStart(2,'0'),'CONFIRMADOS',c.green],[String(delayed).padStart(2,'0'),'RETRASADOS',c.amber],['04','ESCENARIOS',c.pink]].map(([num,label,color])=><View key={label} style={[s.stat,wide&&{flex:1}]}><Text style={[s.statNumber,{color}]}>{num}</Text><Text style={s.statLabel}>{label}</Text></View>)}
         </View>
         <View style={s.sectionRow}><Text style={s.section}>PRÓXIMOS EVENTOS</Text><Pressable onPress={()=>setPage('events')}><Text style={s.link}>VER TODOS →</Text></Pressable></View>
-        {events.slice(0,3).map(e=><EventCard key={e.id} event={e} onEdit={()=>openEdit(e)} onStatus={()=>changeStatus(e.id)} onDelete={()=>remove(e.id)}/>)}
-        <Action label="＋ CREAR NUEVO EVENTO" onPress={openNew}/>
+        {loading && <Text style={s.subtitle}>Cargando eventos desde Amplify...</Text>}
+        {events.slice(0,3).map(e=><EventCard key={e.id} event={e} onEdit={()=>openEdit(e)} onStatus={()=>changeStatus(e)} onDelete={()=>remove(e.id)} disabled={working}/>)}
+        <Action label="＋ CREAR NUEVO EVENTO" onPress={openNew} disabled={working || loading}/>
       </>}
       {page==='events' && <>
         <Text style={s.section}>PROGRAMACIÓN</Text>
         <Text style={s.subtitle}>{filtered.length} eventos · filtra y administra el festival</Text>
+        {loading && <Text style={s.subtitle}>Cargando eventos desde Amplify...</Text>}
         <TextInput accessibilityLabel="Buscar artista o ID" placeholder="Buscar artista o ID..." placeholderTextColor="#777" style={s.input} value={search} onChangeText={setSearch}/>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filters}>
           {['TODOS',...stages].map(v=><Pressable key={v} onPress={()=>setFilter(v)} style={[s.filter,filter===v&&s.filterActive]}><Text style={s.filterText}>{v}</Text></Pressable>)}
         </ScrollView>
         {filtered.length===0&&<Text style={s.subtitle}>No hay eventos con ese filtro.</Text>}
-        {filtered.map(e=><EventCard key={e.id} event={e} onEdit={()=>openEdit(e)} onStatus={()=>changeStatus(e.id)} onDelete={()=>remove(e.id)}/>)}
-        <Action label="＋ NUEVO EVENTO" onPress={openNew}/>
+        {filtered.map(e=><EventCard key={e.id} event={e} onEdit={()=>openEdit(e)} onStatus={()=>changeStatus(e)} onDelete={()=>remove(e.id)} disabled={working}/>)}
+        <Action label="＋ NUEVO EVENTO" onPress={openNew} disabled={working || loading}/>
       </>}
       {page==='form' && <>
         <Text style={s.section}>{editing?'EDITAR EVENTO':'NUEVO EVENTO'}</Text>
@@ -102,12 +177,12 @@ export default function App() {
           <TextInput accessibilityLabel="Hora" placeholder="21:45" placeholderTextColor="#777" style={s.input} value={time} onChangeText={setTime}/>
           <Text style={s.label}>ESTADO</Text>
           <View style={s.choices}>{statuses.map(v=><Pressable key={v} onPress={()=>setStatus(v)} style={[s.choice,status===v&&s.choiceActive]}><Text style={s.choiceText}>{v}</Text></Pressable>)}</View>
-          <Action label={editing?'GUARDAR CAMBIOS':'CREAR EVENTO'} onPress={save}/>
-          <Action label="CANCELAR" secondary onPress={()=>setPage('events')}/>
+          <Action label={working?'GUARDANDO...':editing?'GUARDAR CAMBIOS':'CREAR EVENTO'} onPress={save} disabled={working}/>
+          <Action label="CANCELAR" secondary onPress={()=>setPage('events')} disabled={working}/>
         </View>
       </>}
-      {!!notice && <Text accessibilityRole="alert" style={s.notice}>{notice}</Text>}
-      <View style={s.footer}><Text style={s.footerText}>FESTIVAL CONTROL · FRONTEND DEMO · REACT NATIVE + EXPO</Text><Text style={s.footerText}>NO BACKEND · NO HTTP · NO PERSISTENCIA</Text></View>
+      {!!notice && <Text accessibilityRole="alert" style={[s.notice,noticeIsError&&{color:c.red}]}>{notice}</Text>}
+      <View style={s.footer}><Text style={s.footerText}>FESTIVAL CONTROL · REACT NATIVE + EXPO + AWS AMPLIFY</Text><Text style={s.footerText}>EVENTOS PERSISTENTES · API DE DATOS</Text></View>
     </ScrollView>
   </SafeAreaView>;
 }

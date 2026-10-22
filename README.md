@@ -1,22 +1,31 @@
-# FESTIVAL CONTROL · React Native + Expo Web
+# FESTIVAL CONTROL · React Native + Expo Web + AWS Amplify
 
-Demo **frontend-only** para la charla de AWS Amplify. Mantiene la identidad visual del cuaderno 04-PILARES-SERVERLESS: fondo `#090909`, cards `#151515`, acento `#FF2F92`, confirmado `#39D98A` y retrasado `#F5C542`.
+Aplicación para gestionar la programación de un festival. El backend usa **AWS Amplify Gen 2** y guarda los eventos en una API de datos; la interfaz Expo Web consume esa API para consultar y modificar la programación.
 
 ## Inicio rápido
 
 ```bash
 npm install
-npx expo install --fix
+npm run sandbox
 npm run web
 ```
 
-## Exportación para AWS Amplify Hosting
+`npm run sandbox` necesita credenciales AWS configuradas y crea recursos en tu cuenta. Genera `amplify_outputs.json` en la raíz; ese archivo es local y está excluido de Git. Inicia el frontend después de que termine el sandbox.
+
+## Backend y permisos
+
+- El modelo `Event` guarda artista, escenario, hora y estado.
+- La API key permite **lectura y escritura públicas**, según la configuración elegida para esta demo. Cualquier persona con acceso a la aplicación puede crear, editar o borrar eventos.
+- La API key caduca a los **30 días**. Para producción, restringe las escrituras a usuarios autenticados y revisa la política de acceso antes de desplegar.
+- En una base de datos vacía, la aplicación crea los cuatro eventos de ejemplo una sola vez. Los cambios posteriores se guardan en AWS.
+
+## Despliegue con AWS Amplify Hosting
 
 ```bash
 npm run build:web
 ```
 
-El resultado estático se genera en `dist/`. En Amplify: conectar GitHub, rama `main`, usar `amplify.yml` y publicar `dist/`. No requiere AWS Academy, Lambda ni API Gateway.
+El resultado estático se genera en `dist/`. Conecta el repositorio y la rama `main` a Amplify Hosting y usa `amplify.yml`: el pipeline despliega también el backend para la rama.
 
 ## Prueba de alumno
 
@@ -25,8 +34,6 @@ El resultado estático se genera en `dist/`. En Amplify: conectar GitHub, rama `
 3. Editar el evento y cambiar la hora a `23:00`.
 4. Cambiar el estado a `DELAYED`.
 5. Eliminar el evento.
-
-**Datos simulados en memoria:** los cambios se pierden al recargar la página. Las operaciones no son HTTP reales. Para probar el despliegue automático, cambiar el subtítulo de la aplicación, hacer commit y push y observar el nuevo build en Amplify.
 
 ## Referencia docente
 
